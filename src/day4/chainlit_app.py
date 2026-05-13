@@ -1,73 +1,55 @@
-"""ShopAgent Day 4 — Chainlit frontend with per-agent step visibility."""
-
+"""ShopAgent Day 4 — Chainlit app com CrewAI crew e LangFuse observability."""
 import asyncio
+import os
 
 import chainlit as cl
+from dotenv import load_dotenv
+from langfuse import get_client, observe
 
 from src.day4.crew import ShopAgentCrew
 
-AGENT_LABELS = {
-    "analyst": "AnalystAgent — The Ledger (SQL)",
-    "researcher": "ResearchAgent — The Memory (Semantic)",
-    "reporter": "ReporterAgent — Relatorio Executivo",
-}
+load_dotenv()
+
+langfuse = get_client()
+
+WELCOME = """**ShopAgent Day 4 — Multi-Agent** conectado!
+
+Tenho 3 agentes especializados trabalhando em sequência:
+- **AnalystAgent** — SQL no Postgres (faturamento, pedidos, métricas exatas)
+- **ResearchAgent** — Busca semântica no Qdrant (reviews, reclamações, sentimentos)
+- **ReporterAgent** — Síntese executiva combinando os dois stores
+
+Exemplos de perguntas:
+- "Qual o faturamento por estado e quais as principais reclamações?"
+- "Top 3 produtos mais vendidos e o que os clientes falam deles?"
+- "Quais segmentos de clientes têm mais reclamações de entrega?"
+"""
 
 
 @cl.on_chat_start
-async def on_chat_start():
-    crew_instance = ShopAgentCrew()
-    cl.user_session.set("crew", crew_instance)
-    await cl.Message(
-        content=(
-            "**ShopAgent Multi-Agent pronto!**\n\n"
-            "3 agentes especializados:\n"
-            "- **AnalystAgent** — consultas SQL no The Ledger\n"
-            "- **ResearchAgent** — busca semantica no The Memory\n"
-            "- **ReporterAgent** — relatorio executivo consolidado\n\n"
-            "Faca sua pergunta sobre vendas, clientes ou satisfacao."
-        )
-    ).send()
+async def start() -> None:
+    cl.user_session.set("crew", ShopAgentCrew())
+    await cl.Message(content=WELCOME).send()
 
 
 @cl.on_message
-async def on_message(message: cl.Message):
+@observe()
+async def main(message: cl.Message) -> None:
     crew_instance: ShopAgentCrew = cl.user_session.get("crew")
-    loop = asyncio.get_event_loop()
 
-    steps: dict[str, cl.Step] = {}
-    for key, label in AGENT_LABELS.items():
-        step = cl.Step(name=label, type="run")
-        steps[key] = step
-        await step.__aenter__()
-        step.output = "Aguardando..."
-        await step.update()
+    async with cl.Step(name="ShopAgent Crew", type="run") as step:
+        step.input = message.content
 
-    crew_obj = crew_instance.crew()
+        result = await asyncio.to_thread(
+            crew_instance.crew().kickoff,
+            inputs={"question": message.content},
+        )
 
-    def task_callback(task_output):
-        agent_key = getattr(task_output, "agent", "")
-        raw = getattr(task_output, "raw", str(task_output))
-        for key in steps:
-            if key in str(agent_key).lower():
-                asyncio.run_coroutine_threadsafe(
-                    _update_step(steps[key], raw[:600]),
-                    loop,
-                )
-                break
+        step.output = str(result)
 
-    crew_obj.task_callback = task_callback
+    langfuse.flush()
 
-    result = await asyncio.to_thread(
-        crew_obj.kickoff,
-        inputs={"question": message.content},
-    )
-
-    for step in steps.values():
-        await step.__aexit__(None, None, None)
-
-    await cl.Message(content=str(result.raw)).send()
-
-
-async def _update_step(step: cl.Step, output: str):
-    step.output = output
-    await step.update()
+    msg = cl.Message(content="")
+    for token in str(result).split(" "):
+        await msg.stream_token(token + " ")
+    await msg.send()

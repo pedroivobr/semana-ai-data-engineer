@@ -4,27 +4,25 @@ import os
 from pathlib import Path
 
 import psycopg2
-import qdrant_client
 from dotenv import load_dotenv
+from fastembed import TextEmbedding
 from langchain_core.tools import tool
-from llama_index.core import Settings, VectorStoreIndex
-from llama_index.embeddings.fastembed import FastEmbedEmbedding
-from llama_index.llms.anthropic import Anthropic
-from llama_index.vector_stores.qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
-_llama_settings_initialized = False
+EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+VECTOR_NAME = "fast-all-minilm-l6-v2"
+
+_embedder: TextEmbedding | None = None
 
 
-def _configure_llama_settings() -> None:
-    global _llama_settings_initialized
-    if _llama_settings_initialized:
-        return
-    Settings.llm = Anthropic(model="claude-sonnet-4-20250514")
-    Settings.embed_model = FastEmbedEmbedding(model_name="BAAI/bge-base-en-v1.5")
-    _llama_settings_initialized = True
+def _get_embedder() -> TextEmbedding:
+    global _embedder
+    if _embedder is None:
+        _embedder = TextEmbedding(EMBED_MODEL)
+    return _embedder
 
 
 def _get_postgres_connection():
@@ -79,23 +77,30 @@ def semantic_search(question: str) -> str:
     Args:
         question: Natural language question for semantic similarity search.
     """
-    _configure_llama_settings()
     qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
     collection_name = os.environ.get("QDRANT_COLLECTION", "shopagent_reviews")
 
     try:
-        client = qdrant_client.QdrantClient(url=qdrant_url)
-        vector_store = QdrantVectorStore(client=client, collection_name=collection_name)
-        index = VectorStoreIndex.from_vector_store(vector_store)
-        engine = index.as_query_engine(similarity_top_k=5)
-        response = engine.query(question)
+        embedder = _get_embedder()
+        query_vector = list(embedder.embed([question]))[0].tolist()
 
-        result_parts = [f"Resposta: {response.response}"]
-        if response.source_nodes:
-            result_parts.append(f"\nFontes ({len(response.source_nodes)} reviews):")
-            for node in response.source_nodes:
-                score = f"[{node.score:.3f}]" if node.score else ""
-                result_parts.append(f"  {score} {node.text[:200]}")
+        client = QdrantClient(url=qdrant_url)
+        response = client.query_points(
+            collection_name=collection_name,
+            query=query_vector,
+            using=VECTOR_NAME,
+            limit=5,
+        )
+        results = response.points
+
+        if not results:
+            return "Nenhum review encontrado para essa busca."
+
+        result_parts = [f"Encontrei {len(results)} reviews relevantes:"]
+        for r in results:
+            score = f"[{r.score:.3f}]"
+            comment = r.payload.get("document", r.payload.get("comment", ""))
+            result_parts.append(f"  {score} {comment[:200]}")
         return "\n".join(result_parts)
     except Exception as e:
         return f"Semantic Search Error: {e}"

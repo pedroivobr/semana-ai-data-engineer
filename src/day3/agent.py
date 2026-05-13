@@ -1,5 +1,7 @@
 """ShopAgent Day 3 — LangGraph ReAct agent with dual-store routing."""
 
+import os
+
 from langchain_anthropic import ChatAnthropic
 from langgraph.prebuilt import create_react_agent
 
@@ -58,11 +60,19 @@ review_id, order_id, rating (1-5), comment (texto), sentiment (positive/negative
 TOOLS = [execute_sql, semantic_search]
 
 
-def create_agent(*, streaming: bool = False):
+def _thinking_config(budget: int) -> dict:
+    if budget <= 0:
+        return {}
+    return {"thinking": {"type": "enabled", "budget_tokens": budget}}
+
+
+def create_agent(*, streaming: bool = False, thinking: bool = True):
+    budget = int(os.environ.get("THINKING_BUDGET_TOKENS", "2000")) if thinking else 0
     llm = ChatAnthropic(
         model="claude-sonnet-4-20250514",
-        temperature=0,
+        temperature=1 if budget > 0 else 0,  # extended thinking requires temperature=1
         streaming=streaming,
+        model_kwargs=_thinking_config(budget),
     )
     return create_react_agent(
         model=llm,

@@ -1,13 +1,13 @@
-# DESIGN: Multi-Agent ShopAgent — CrewAI 3-Agent Crew
+# DESIGN: ShopAgent Day 4 — Multi-Agent CrewAI
 
-> Technical design for a CrewAI sequential crew with 3 specialist agents, YAML config, Chainlit step-by-step UI, DeepEval evaluation, and LangFuse observability.
+> Technical design for implementing the 3-agent CrewAI crew with Chainlit, DeepEval e LangFuse.
 
 ## Metadata
 
 | Attribute | Value |
 |-----------|-------|
 | **Feature** | SHOPAGENT_DAY4 |
-| **Date** | 2026-04-16 |
+| **Date** | 2026-04-26 |
 | **Author** | design-agent |
 | **DEFINE** | [DEFINE_SHOPAGENT_DAY4.md](./DEFINE_SHOPAGENT_DAY4.md) |
 | **Status** | Ready for Build |
@@ -17,83 +17,44 @@
 ## Architecture Overview
 
 ```text
-┌──────────────────────────────────────────────────────────────────────┐
-│                        CHAINLIT UI (Browser)                         │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  cl.Step: AnalystAgent    │  cl.Step: ResearchAgent          │   │
-│  │  Shows SQL + results      │  Shows reviews + themes          │   │
-│  ├───────────────────────────┴──────────────────────────────────┤   │
-│  │  cl.Step: ReporterAgent                                      │   │
-│  │  Shows executive report                                      │   │
-│  ├──────────────────────────────────────────────────────────────┤   │
-│  │  cl.Message: Final executive report (full text)              │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────┬────────────────────────────────────┘
-                                  │ HTTP (localhost:8000)
-                                  ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                      chainlit_app.py                                  │
-│                                                                      │
-│  @cl.on_chat_start → create ShopAgentCrew, store in session          │
-│  @cl.on_message    → pre-create 3 cl.Steps                          │
-│                    → asyncio.to_thread(crew.kickoff)                 │
-│                    → task_callback updates each Step                 │
-└─────────────────────────────────┬────────────────────────────────────┘
-                                  │
-                                  ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                           crew.py                                     │
-│                                                                      │
-│  @CrewBase class ShopAgentCrew                                       │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  agents_config = "config/agents.yaml"                          │  │
-│  │  tasks_config  = "config/tasks.yaml"                           │  │
-│  │                                                                │  │
-│  │  Sequential Process:                                           │  │
-│  │                                                                │  │
-│  │  ┌─────────────┐   ┌──────────────┐   ┌─────────────────┐    │  │
-│  │  │AnalystAgent │──→│ResearchAgent │──→│ ReporterAgent   │    │  │
-│  │  │ tool: sql   │   │ tool: qdrant │   │ tools: none     │    │  │
-│  │  │ context: —  │   │ context: —   │   │ context: [1, 2] │    │  │
-│  │  └─────────────┘   └──────────────┘   └─────────────────┘    │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│                   │                        │                         │
-│             ┌─────┘                        └─────┐                   │
-│             ▼                                    ▼                   │
-│  ┌────────────────────────┐   ┌──────────────────────────────────┐  │
-│  │ supabase_execute_sql   │   │  qdrant_semantic_search          │  │
-│  │ @tool from tools.py    │   │  @tool from tools.py             │  │
-│  └───────────┬────────────┘   └───────────────┬──────────────────┘  │
-└──────────────┼────────────────────────────────┼──────────────────────┘
-               │                                │
-               ▼                                ▼
-┌──────────────────────────┐  ┌────────────────────────────────────┐
-│  Postgres (The Ledger)   │  │  Qdrant (The Memory)               │
-│  psycopg2 connection     │  │  qdrant_client + fastembed          │
-│  localhost:5432           │  │  localhost:6333                     │
-│  OR Supabase Cloud       │  │  OR Qdrant Cloud                   │
-│                          │  │                                    │
-│  Tables:                 │  │  Collection:                       │
-│  • customers             │  │  • shopagent_reviews (203 docs)    │
-│  • products              │  │  • BAAI/bge-base-en-v1.5 (768-dim) │
-│  • orders                │  │                                    │
-└──────────────────────────┘  └────────────────────────────────────┘
-         Docker / Cloud                    Docker / Cloud
+┌──────────────────────────────────────────────────────────────────┐
+│                    SHOPAGENT DAY 4 — FLOW                        │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Browser                                                         │
+│    │  [pergunta do usuário]                                      │
+│    ▼                                                             │
+│  chainlit_app.py                                                 │
+│    │  run_in_executor → crew.kickoff({"question": ...})          │
+│    │                                                             │
+│    ▼  [LangFuse: start trace]                                    │
+│  ShopAgentCrew (crew.py)  ← config/agents.yaml + tasks.yaml     │
+│    │                                                             │
+│    ├─ 1. AnalystAgent                                            │
+│    │       └─ execute_sql(query) → Postgres / Supabase           │
+│    │                                                             │
+│    ├─ 2. ResearchAgent                                           │
+│    │       └─ qdrant_semantic_search(question) → Qdrant          │
+│    │                                                             │
+│    └─ 3. ReporterAgent                                           │
+│              └─ síntese (SQL result + Qdrant result) → texto     │
+│                                                                  │
+│    [LangFuse: flush trace]                                       │
+│    │                                                             │
+│    ▼                                                             │
+│  chainlit_app.py → stream_token(resposta) → Browser             │
+│                                                                  │
+│  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─           │
+│  eval_agent.py (pytest)                                          │
+│    ├─ ToolCorrectnessMetric  → routing SQL vs Qdrant             │
+│    └─ AnswerRelevancyMetric  → qualidade da resposta             │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
 
-               ┌──────────────────────────────────────┐
-               │         QUALITY LAYER                 │
-               │                                       │
-               │  eval_agent.py (DeepEval)             │
-               │  • ToolCorrectnessMetric              │
-               │  • AnswerRelevancyMetric              │
-               │  • Custom GEval metric                │
-               │                                       │
-               │  LangFuse (@observe decorator)        │
-               │  • Per-agent spans                    │
-               │  • Token usage + cost                 │
-               │  • Latency breakdown                  │
-               └──────────────────────────────────────┘
+STORAGE
+  Local:  Postgres (Docker) + Qdrant (Docker)
+  Cloud:  Supabase (POSTGRES_* vars apontando para cloud)
+          Qdrant Cloud (QDRANT_URL + QDRANT_API_KEY)
 ```
 
 ---
@@ -102,152 +63,161 @@
 
 | Component | Purpose | Technology |
 |-----------|---------|------------|
-| `config/agents.yaml` | Declarative agent definitions (role, goal, backstory) | CrewAI YAML config |
-| `config/tasks.yaml` | Task definitions with `{question}` interpolation | CrewAI YAML config |
-| `tools.py` | Two CrewAI tools: SQL execution + semantic search | `@tool` decorator, psycopg2, qdrant_client, fastembed |
-| `crew.py` | `@CrewBase` orchestration with Sequential process | CrewAI `Agent`, `Crew`, `Task`, `Process` |
-| `chainlit_app.py` | Chat UI with per-agent `cl.Step` visibility | Chainlit lifecycle hooks, `asyncio.to_thread` |
-| `eval_agent.py` | DeepEval test suite with 3 metrics | DeepEval `ToolCorrectnessMetric`, `AnswerRelevancyMetric`, `GEval` |
+| `tools.py` | Ferramentas de acesso aos stores | CrewAI `@tool`, psycopg2, qdrant-client, fastembed |
+| `crew.py` | Orquestração dos 3 agentes | CrewAI `@CrewBase`, `Process.sequential` |
+| `config/agents.yaml` | Role, goal, backstory dos agentes | YAML |
+| `config/tasks.yaml` | Description, expected_output das tasks | YAML |
+| `chainlit_app.py` | Interface conversacional + LangFuse trace | Chainlit, langfuse |
+| `eval_agent.py` | Suite de testes de qualidade | DeepEval, pytest |
+| `requirements.txt` | Dependências fixadas do day4 | pip |
+
+---
+
+## Agent Responsibilities
+
+> Cada agente da crew tem escopo exclusivo — ferramentas, store e tipo de pergunta.
+
+| Agente | Role | Tool | Store | Tipo de Pergunta |
+|--------|------|------|-------|-----------------|
+| **AnalystAgent** | E-Commerce Data Analyst | `execute_sql` | Postgres / Supabase (The Ledger) | Números exatos: faturamento, contagem, ticket médio, GROUP BY |
+| **ResearchAgent** | Customer Experience Researcher | `qdrant_semantic_search` | Qdrant (The Memory) | Sentimentos, reclamações, temas de reviews, feedback qualitativo |
+| **ReporterAgent** | Executive Report Writer | *(nenhuma — síntese pura)* | Ambos via contexto das tasks anteriores | Sintetiza e estrutura o relatório final em PT-BR |
+
+### Fluxo de Contexto entre Agentes
+
+```text
+analysis_task  ──output──┐
+                          ├──context──→ report_task (ReporterAgent)
+research_task  ──output──┘
+```
+
+O `report_task` é configurado com `context=[analysis_task(), research_task()]` no `crew.py` — o ReporterAgent recebe os resultados dos dois como entrada implícita, sem precisar de tools próprias.
+
+### Regras de Roteamento
+
+| Pergunta do usuário contém... | Agente principal | Tool acionada |
+|-------------------------------|-----------------|---------------|
+| "faturamento", "total", "quanto", "média", "pedidos", "por estado" | AnalystAgent | `execute_sql` |
+| "reclamação", "sentimento", "review", "cliente fala", "opinião" | ResearchAgent | `qdrant_semantic_search` |
+| Ambos os tipos (pergunta híbrida) | Ambos (Sequential: Analyst → Researcher → Reporter) | Ambas as tools |
 
 ---
 
 ## Key Decisions
 
-### Decision 1: psycopg2 Direct Connection (Not Supabase REST API)
+### Decision 1: CrewAI `@tool` em vez de LangChain `@tool`
 
 | Attribute | Value |
 |-----------|-------|
 | **Status** | Accepted |
-| **Date** | 2026-04-16 |
+| **Date** | 2026-04-26 |
 
-**Context:** The KB pattern uses `httpx` + Supabase REST API (`/rest/v1/rpc/execute_sql`). But Days 1-3 use `psycopg2` directly. Two approaches exist for Day 4.
+**Context:** Day 3 usa `langchain_core.tools.tool`. Day 4 usa CrewAI, que tem seu próprio decorador de tool.
 
-**Choice:** Use `psycopg2` with env-based host/port/db/user/password — same pattern as Day 3's tools.
+**Choice:** Importar `@tool` de `crewai.tools` em `src/day4/tools.py`.
 
-**Rationale:** Continuity. Participants already understand `psycopg2` from Day 3. The cloud migration story is cleaner: swap `POSTGRES_HOST` from `localhost` to Supabase's Postgres connection string. No new concepts (REST API, service keys) needed.
+**Rationale:** CrewAI registra e serializa tools de forma diferente do LangChain. Misturar os dois causa erros de compatibilidade na hora de atribuir tools aos agents via YAML.
 
 **Alternatives Rejected:**
-1. Supabase REST API — Introduces httpx, API keys, and the `/rpc/execute_sql` endpoint pattern. More production-correct but too many new concepts for a live session already introducing CrewAI + DeepEval + LangFuse.
+1. Reusar tools do day3 (LangChain) via `BaseTool` wrapper — adiciona boilerplate sem ganho
+2. Usar `crewai_tools.BaseTool` — mais verboso que o simples `@tool` para este caso
 
 **Consequences:**
-- Trade-off: Less "Supabase-native" — we're using Postgres directly, not the Supabase SDK
-- Benefit: Zero new dependencies for the SQL tool; familiar pattern from Day 3
+- `src/day4/tools.py` é completamente independente de `src/day3/`
+- A lógica de conexão (psycopg2, qdrant-client) é reescrita mas idêntica em essência
 
 ---
 
-### Decision 2: FastEmbed Direct (Not LlamaIndex, Not Supabase Edge Function)
+### Decision 2: Cloud migration via variáveis `POSTGRES_*` unificadas
 
 | Attribute | Value |
 |-----------|-------|
 | **Status** | Accepted |
-| **Date** | 2026-04-16 |
+| **Date** | 2026-04-26 |
 
-**Context:** Day 3 uses LlamaIndex as middleware for Qdrant queries. The KB pattern uses a Supabase Edge Function for embeddings. Day 4 needs a simpler approach.
+**Context:** `.env.example` tem `POSTGRES_HOST/PORT/DB/USER/PASSWORD` para local e `SUPABASE_URL/KEY` para cloud. Precisamos de zero mudança de código na migração.
 
-**Choice:** Use `qdrant_client.QdrantClient` + `fastembed.TextEmbedding` directly. Encode the query locally with `BAAI/bge-base-en-v1.5`, then call `client.query_points()`.
+**Choice:** `execute_sql` usa **sempre** `POSTGRES_*` via psycopg2. Para cloud, o usuário preenche as vars com os dados de conexão do Supabase (que expõe Postgres direto).
 
-**Rationale:** Removes both LlamaIndex (6+ packages) and Supabase Edge Functions from the dependency graph. `fastembed` is already installed from Day 2. The Qdrant client's search API is straightforward. Participants see the raw pipeline: question → embed → search → format.
+**Rationale:** Supabase é Postgres. Fornece host, porta, usuário, senha e DB — exatamente os campos que `POSTGRES_*` mapeiam. Não precisamos do SDK Supabase para executar SQL diretamente.
 
 **Alternatives Rejected:**
-1. LlamaIndex query engine (Day 3 pattern) — Adds 6 dependencies; abstracts away the embedding step
-2. Supabase Edge Function for embeddings — Requires deploying a serverless function; too complex for live demo
+1. `supabase-py` SDK para cloud — adiciona dependência e bifurca o código (SDK local vs cloud)
+2. `DATABASE_URL` string única — requer mudar `.env.example` que já está distribuído aos participantes
 
 **Consequences:**
-- Trade-off: Embedding happens locally (slower first call while model loads, ~2s)
-- Benefit: Participants understand every step; no hidden middleware
+- Migração = editar 5 vars no `.env` (host, port, db, user, password para valores Supabase)
+- `SUPABASE_URL` e `SUPABASE_KEY` ficam no `.env.example` como comentário informativo
 
 ---
 
-### Decision 3: YAML Config with @CrewBase (Not Pure Inline Python)
+### Decision 3: LangFuse via `@observe` em `chainlit_app.py`
 
 | Attribute | Value |
 |-----------|-------|
 | **Status** | Accepted |
-| **Date** | 2026-04-16 |
+| **Date** | 2026-04-26 |
 
-**Context:** CrewAI supports both YAML-based configuration and inline Python definitions.
+**Context:** LangFuse pode ser integrado via callbacks do CrewAI ou via decorators/context managers no código que chama a crew.
 
-**Choice:** Use `@CrewBase` with `agents_config = "config/agents.yaml"` and `tasks_config = "config/tasks.yaml"`. Agent methods in Python reference YAML keys.
+**Choice:** Usar `@observe()` da langfuse SDK no handler `on_message` do Chainlit que invoca `crew.kickoff()`.
 
-**Rationale:** Declarative YAML separates *identity* (who are the agents) from *orchestration* (how they run). Participants can modify a backstory in YAML without touching Python — this is the key pedagogical win. Mirrors production patterns (config-as-code).
+**Rationale:** Wrapping em `chainlit_app.py` captura o trace completo (entrada do usuário → resposta final) sem precisar modificar `crew.py`. Mais limpo e desacoplado. O CrewAI verbosity (`verbose=True`) já loga o raciocínio dos agentes internamente.
 
 **Alternatives Rejected:**
-1. Pure inline Python — Fewer files but mixes config with code; harder to modify agents independently
+1. CrewAI callbacks (`step_callback`) — API instável entre versões, mais frágil
+2. Instrumentação manual por agente — verboso, acoplado à lógica da crew
 
 **Consequences:**
-- Trade-off: Two places to look (YAML + Python)
-- Benefit: Backstory changes require zero Python knowledge; AT-010 is testable
+- Traces aparecem no LangFuse com 1 span por chamada do Chainlit
+- Raciocínio interno dos agentes visível nos logs do terminal (verbose=True), não nos traces do LangFuse
 
 ---
 
-### Decision 4: Synchronous kickoff in asyncio.to_thread (Not Async CrewAI)
+### Decision 4: LLM explícito `claude-sonnet-4-6` via `LLM()` em cada agente
 
 | Attribute | Value |
 |-----------|-------|
 | **Status** | Accepted |
-| **Date** | 2026-04-16 |
+| **Date** | 2026-04-27 |
 
-**Context:** CrewAI's `crew.kickoff()` is synchronous and blocks until all agents complete. Chainlit runs on an async event loop.
+**Context:** CrewAI usa OpenAI como LLM padrão. Sem configuração explícita, a crew tenta `OPENAI_API_KEY` e falha — o projeto usa Anthropic Claude.
 
-**Choice:** Wrap `crew.kickoff()` in `asyncio.to_thread()` so it runs in a thread pool, keeping the Chainlit event loop free. Use a `task_callback` to update `cl.Step` elements as each agent finishes.
+**Choice:** Instanciar `LLM(model="anthropic/claude-sonnet-4-6")` em `crew.py` e passar `llm=llm` em cada `Agent()`. CrewAI usa LiteLLM internamente, que suporta o prefixo `anthropic/`.
 
-**Rationale:** This is the established pattern from the KB (`chainlit-crewai.md`). The callback fires after each task completes, providing the bridge between CrewAI's sync world and Chainlit's async UI.
+**Rationale:** Configuração explícita em código é mais previsível que env vars implícitas. Centralizar o LLM em `crew.py` garante que todos os agentes usam o mesmo modelo — trocar o modelo é 1 linha.
 
 **Alternatives Rejected:**
-1. Blocking the event loop — Freezes the Chainlit UI; steps won't update until all agents finish
-2. CrewAI `kickoff_async()` — Experimental API; less predictable for live demo
+1. `llm` no `agents.yaml` — sintaxe varia entre versões do CrewAI, menos portável
+2. `OPENAI_API_KEY=fake` + `OPENAI_BASE_URL` apontando para Anthropic — gambiarra
 
 **Consequences:**
-- Trade-off: No per-token streaming from agents (unlike Day 3's LangGraph); results appear per-agent, not per-token
-- Benefit: Reliable, predictable; each agent's complete output appears as a step
+- `ANTHROPIC_API_KEY` obrigatório no `.env` (já estava)
+- Todos os 3 agentes usam `claude-sonnet-4-6`
+- **Cascade:** `crew.py` precisa importar `LLM` e passar `llm=` em cada `Agent()`
 
 ---
 
-### Decision 5: Three DeepEval Metrics (ToolCorrectness + AnswerRelevancy + GEval)
+### Decision 5: `crew.kickoff()` em thread executor no Chainlit
 
 | Attribute | Value |
 |-----------|-------|
 | **Status** | Accepted |
-| **Date** | 2026-04-16 |
+| **Date** | 2026-04-26 |
 
-**Context:** DEFINE requires a "full evaluation suite" beyond minimal smoke tests.
+**Context:** `crew.kickoff()` é bloqueante (síncrono). Chainlit é async. Chamar diretamente congela o event loop.
 
-**Choice:** Three metrics in `eval_agent.py`:
-1. `ToolCorrectnessMetric(threshold=1.0)` — Binary: did the agent pick the right tool?
-2. `AnswerRelevancyMetric(threshold=0.7)` — Is the answer relevant to the question?
-3. `GEval(criteria="report_quality")` — Custom: does the report contain data + insights + recommendations?
+**Choice:** `await asyncio.to_thread(crew.kickoff, inputs)` para rodar a crew em thread separada.
 
-**Rationale:** Each metric teaches a different concept: tool routing accuracy, response relevance, and custom business criteria. The GEval metric shows DeepEval's extensibility beyond built-in metrics.
+**Rationale:** `asyncio.to_thread` é o padrão Python 3.9+ para rodar código bloqueante sem congelar o loop assíncrono.
 
 **Alternatives Rejected:**
-1. ToolCorrectness only — Too shallow; doesn't evaluate output quality
-2. Full production suite (Faithfulness, Bias, Toxicity) — Overkill; adds 10+ minutes to evaluation time
+1. `loop.run_in_executor(None, ...)` — mais verboso, mesmo resultado
+2. `crew.kickoff_async()` — disponível em versões recentes mas menos estável em produção
 
 **Consequences:**
-- Trade-off: GEval requires an LLM call to evaluate (costs ~$0.01 per test case)
-- Benefit: Participants learn 3 evaluation paradigms: binary, threshold, and custom
-
----
-
-### Decision 6: LangFuse @observe Decorator (Not CrewAI Native Callbacks)
-
-| Attribute | Value |
-|-----------|-------|
-| **Status** | Accepted |
-| **Date** | 2026-04-16 |
-
-**Context:** LangFuse can integrate with CrewAI via either the `@observe` decorator pattern or CrewAI's native callback handlers.
-
-**Choice:** Use LangFuse `@observe` decorator on the crew `kickoff` function, creating a top-level trace with nested spans. Combine with `propagate_attributes` for session/user context.
-
-**Rationale:** The `@observe` pattern is framework-agnostic — participants learn a pattern they can apply to any Python function, not just CrewAI. The KB pattern (`python-sdk-integration.md`) validates this approach.
-
-**Alternatives Rejected:**
-1. CrewAI native `langfuse_callback` — Tighter integration but less educational; participants wouldn't learn the general `@observe` pattern
-
-**Consequences:**
-- Trade-off: Less granular per-agent tracing (one trace wrapping the full crew, not per-agent spans)
-- Benefit: General-purpose pattern; works with any framework
+- UI do Chainlit permanece responsiva durante a execução da crew
+- O spinner "aguardando..." aparece naturalmente via `cl.Step` enquanto processa
 
 ---
 
@@ -255,14 +225,14 @@
 
 | # | File | Action | Purpose | Agent | Dependencies |
 |---|------|--------|---------|-------|--------------|
-| 1 | `src/day4/__init__.py` | Create | Package marker | (general) | None |
-| 2 | `src/day4/config/agents.yaml` | Create | 3 agent definitions: role, goal, backstory | @crewai-specialist | None |
-| 3 | `src/day4/config/tasks.yaml` | Create | 3 task definitions: description, expected_output, agent, context | @crewai-specialist | None |
-| 4 | `src/day4/tools.py` | Create | `supabase_execute_sql` + `qdrant_semantic_search` with CrewAI `@tool` | @crewai-specialist | None |
-| 5 | `src/day4/crew.py` | Create | `@CrewBase` ShopAgentCrew orchestration + CLI entry point | @crewai-specialist | 2, 3, 4 |
-| 6 | `src/day4/chainlit_app.py` | Create | Chainlit frontend with `cl.Step` per agent | @shopagent-builder | 4, 5 |
-| 7 | `src/day4/eval_agent.py` | Create | DeepEval test suite (3 metrics, 6+ test cases) + LangFuse tracing | @shopagent-builder | 4, 5 |
-| 8 | `src/day4/requirements.txt` | Create | Day 4 specific Python dependencies | @crewai-specialist | None |
+| 1 | `src/day4/__init__.py` | Create | Marca `day4` como pacote Python | @shopagent-builder | None |
+| 2 | `src/day4/requirements.txt` | Create | Dependências fixadas do day4 | @shopagent-builder | None |
+| 3 | `src/day4/config/agents.yaml` | Create | Role, goal, backstory dos 3 agentes CrewAI | @crewai-specialist | None |
+| 4 | `src/day4/config/tasks.yaml` | Create | Description e expected_output das 3 tasks CrewAI | @crewai-specialist | 3 |
+| 5 | `src/day4/tools.py` | Create | `execute_sql` + `qdrant_semantic_search` com `@tool` CrewAI | @crewai-specialist | 2 |
+| 6 | `src/day4/crew.py` | Create | `ShopAgentCrew` com `@CrewBase` e `Process.sequential` | @crewai-specialist | 3, 4, 5 |
+| 7 | `src/day4/chainlit_app.py` | Create | Handler Chainlit + `crew.kickoff()` + LangFuse observe | @shopagent-builder | 6 |
+| 8 | `src/day4/eval_agent.py` | Create | Suite DeepEval com pytest (6 test cases) | @shopagent-builder | 5, 6 |
 
 **Total Files:** 8
 
@@ -270,57 +240,73 @@
 
 ## Agent Assignment Rationale
 
-| Agent | Files Assigned | Why This Agent |
-|-------|----------------|----------------|
-| @crewai-specialist | 2, 3, 4, 5, 8 | CrewAI multi-agent orchestration expert; specializes in YAML config, `@CrewBase`, `@tool` decorator, process selection, and tool-to-agent registration. Has MCP validation via Context7 + Exa for CrewAI API verification |
-| @shopagent-builder | 6, 7 | ShopAgent domain specialist; understands Chainlit + CrewAI integration pattern (`asyncio.to_thread`, `task_callback`) and DeepEval evaluation setup for the dual-store architecture |
-| (general) | 1 | Trivial file (empty `__init__.py`) |
+| Agent | Files | Especialização |
+|-------|-------|----------------|
+| @crewai-specialist | 3, 4, 5, 6 | Domínio CrewAI: YAML config, `@CrewBase`, `@tool`, `Process.sequential` — usa KB `.claude/kb/crewai/` e padrão `shopagent-crew.md` |
+| @shopagent-builder | 1, 2, 7, 8 | Scaffolding Day 4, integração Chainlit + LangFuse, suite DeepEval — conhece a arquitetura completa do ShopAgent |
 
 **Agent Discovery:**
-- Scanned: `.claude/agents/**/*.md`
-- @crewai-specialist matched by: CrewAI domain, YAML config, tool wiring, crew orchestration
-- @shopagent-builder matched by: Chainlit integration, DeepEval evaluation, ShopAgent domain context
+- `@crewai-specialist` → `.claude/agents/domain/crewai-specialist.md` — acionado para qualquer task com CrewAI agents, tasks, tools ou YAML config
+- `@shopagent-builder` → `.claude/agents/domain/shopagent-builder.md` — acionado para scaffolding, UI e avaliação do ShopAgent
 
 ---
 
 ## Code Patterns
 
-### Pattern 1: CrewAI @tool with psycopg2 (The Ledger)
+### Pattern 1: tools.py — `execute_sql` com CrewAI `@tool`
 
 ```python
-"""tools.py — supabase_execute_sql tool for The Ledger."""
+"""ShopAgent Day 4 — tools para The Ledger (SQL) e The Memory (Qdrant)."""
 import os
 from pathlib import Path
 
 import psycopg2
 from crewai.tools import tool
 from dotenv import load_dotenv
+from fastembed import TextEmbedding
+from qdrant_client import QdrantClient
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
+EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+VECTOR_NAME = "fast-all-minilm-l6-v2"
 
-def _get_postgres_connection():
+_embedder: TextEmbedding | None = None
+
+
+def _get_embedder() -> TextEmbedding:
+    global _embedder
+    if _embedder is None:
+        _embedder = TextEmbedding(EMBED_MODEL)
+    return _embedder
+
+
+def _postgres_conn():
     return psycopg2.connect(
-        host=os.environ.get("POSTGRES_HOST", "localhost"),
+        host=os.environ["POSTGRES_HOST"],
         port=int(os.environ.get("POSTGRES_PORT", 5432)),
-        dbname=os.environ.get("POSTGRES_DB", "shopagent"),
-        user=os.environ.get("POSTGRES_USER", "shopagent"),
-        password=os.environ.get("POSTGRES_PASSWORD", "shopagent"),
+        dbname=os.environ["POSTGRES_DB"],
+        user=os.environ["POSTGRES_USER"],
+        password=os.environ["POSTGRES_PASSWORD"],
     )
 
 
-@tool("supabase_execute_sql")
-def supabase_execute_sql(query: str) -> str:
-    """Execute a SQL query against the ShopAgent Postgres database (The Ledger).
-    Use for exact metrics: revenue, order counts, averages, customer segments.
-    Available tables: customers, products, orders.
-    Always write SELECT queries. Never mutate data."""
-    conn = _get_postgres_connection()
+@tool("execute_sql")
+def execute_sql(query: str) -> str:
+    """Executa SQL SELECT no Postgres (The Ledger) para dados exatos.
+
+    Use para: faturamento, contagem de pedidos, ticket médio, distribuição
+    de pagamentos, análise por segmento, GROUP BY, JOINs.
+
+    Args:
+        query: Query SQL SELECT válida para o banco shopagent.
+    """
+    conn = _postgres_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(query)
-            columns = [desc[0] for desc in cur.description]
+            columns = [d[0] for d in cur.description]
             rows = cur.fetchall()
         lines = [" | ".join(columns)]
         for row in rows:
@@ -330,77 +316,60 @@ def supabase_execute_sql(query: str) -> str:
         return f"SQL Error: {e}"
     finally:
         conn.close()
-```
-
-### Pattern 2: CrewAI @tool with qdrant_client + fastembed (The Memory)
-
-```python
-"""tools.py — qdrant_semantic_search tool for The Memory."""
-import os
-
-from crewai.tools import tool
-from fastembed import TextEmbedding
-from qdrant_client import QdrantClient
-
-_embedding_model = None
-
-
-def _get_embedding_model() -> TextEmbedding:
-    global _embedding_model
-    if _embedding_model is None:
-        _embedding_model = TextEmbedding(model_name="BAAI/bge-base-en-v1.5")
-    return _embedding_model
 
 
 @tool("qdrant_semantic_search")
 def qdrant_semantic_search(question: str) -> str:
-    """Search customer reviews by meaning using Qdrant vector database (The Memory).
-    Use for opinions, complaints, sentiment themes, and customer feedback.
-    The collection contains 203 Portuguese reviews with rating, comment, sentiment."""
-    qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
-    qdrant_api_key = os.environ.get("QDRANT_API_KEY", None)
+    """Busca semântica em reviews de clientes no Qdrant (The Memory).
+
+    Use para: reclamações, sentimento, temas de feedback, opiniões sobre
+    entrega, qualidade, preço.
+
+    Args:
+        question: Pergunta em linguagem natural para busca semântica.
+    """
+    url = os.environ.get("QDRANT_URL", "http://localhost:6333")
+    api_key = os.environ.get("QDRANT_API_KEY")
     collection = os.environ.get("QDRANT_COLLECTION", "shopagent_reviews")
 
-    model = _get_embedding_model()
-    embeddings = list(model.embed([question]))
-    query_vector = embeddings[0].tolist()
-
-    client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
-    results = client.query_points(
-        collection_name=collection,
-        query=query_vector,
-        limit=5,
-        with_payload=True,
-    )
-
-    if not results.points:
-        return "Nenhum review encontrado para esta consulta."
-
-    lines: list[str] = []
-    for point in results.points:
-        payload = point.payload or {}
-        rating = payload.get("rating", "?")
-        sentiment = payload.get("sentiment", "unknown")
-        comment = payload.get("comment", "")[:200]
-        score = round(point.score, 3)
-        lines.append(f"[score={score} | rating={rating} | {sentiment}] {comment}")
-
-    return "\n".join(lines)
+    try:
+        embedder = _get_embedder()
+        vector = list(embedder.embed([question]))[0].tolist()
+        client = QdrantClient(url=url, api_key=api_key)
+        response = client.query_points(
+            collection_name=collection,
+            query=vector,
+            using=VECTOR_NAME,
+            limit=5,
+        )
+        if not response.points:
+            return "Nenhum review encontrado."
+        parts = [f"Encontrei {len(response.points)} reviews relevantes:"]
+        for r in response.points:
+            comment = r.payload.get("document", r.payload.get("comment", ""))
+            parts.append(f"  [{r.score:.3f}] {comment[:200]}")
+        return "\n".join(parts)
+    except Exception as e:
+        return f"Semantic Search Error: {e}"
 ```
 
-### Pattern 3: @CrewBase with YAML Config
+---
+
+### Pattern 2: crew.py — `ShopAgentCrew` com `@CrewBase`
 
 ```python
-"""crew.py — ShopAgentCrew orchestration."""
-from crewai import Agent, Crew, Process, Task
+"""ShopAgent Day 4 — CrewAI crew com 3 agentes especializados."""
+from crewai import Agent, Crew, LLM, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 
-from src.day4.tools import qdrant_semantic_search, supabase_execute_sql
+from src.day4.tools import execute_sql, qdrant_semantic_search
+
+_llm = LLM(model="anthropic/claude-sonnet-4-6")
 
 
 @CrewBase
 class ShopAgentCrew:
-    """ShopAgent multi-agent crew for e-commerce analysis."""
+    """Crew multi-agente para análise de e-commerce."""
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
@@ -409,8 +378,8 @@ class ShopAgentCrew:
     def analyst(self) -> Agent:
         return Agent(
             config=self.agents_config["analyst"],
-            tools=[supabase_execute_sql],
-            allow_delegation=False,
+            tools=[execute_sql],
+            llm=_llm,
             verbose=True,
         )
 
@@ -419,7 +388,7 @@ class ShopAgentCrew:
         return Agent(
             config=self.agents_config["researcher"],
             tools=[qdrant_semantic_search],
-            allow_delegation=False,
+            llm=_llm,
             verbose=True,
         )
 
@@ -427,7 +396,7 @@ class ShopAgentCrew:
     def reporter(self) -> Agent:
         return Agent(
             config=self.agents_config["reporter"],
-            allow_delegation=False,
+            llm=_llm,
             verbose=True,
         )
 
@@ -454,246 +423,246 @@ class ShopAgentCrew:
             process=Process.sequential,
             verbose=True,
         )
-
-
-def run_crew(question: str) -> str:
-    crew_instance = ShopAgentCrew()
-    result = crew_instance.crew().kickoff(inputs={"question": question})
-    return result.raw
-
-
-if __name__ == "__main__":
-    question = (
-        "Faca uma analise completa de satisfacao dos clientes por regiao, "
-        "incluindo faturamento, principais reclamacoes e um plano de acao."
-    )
-    print(run_crew(question))
 ```
 
-### Pattern 4: Chainlit Step-by-Step with CrewAI task_callback
+---
+
+### Pattern 3: config/agents.yaml
+
+```yaml
+analyst:
+  role: "Analista de Dados E-Commerce"
+  goal: "Extrair métricas precisas do banco de dados ShopAgent via queries SQL"
+  backstory: >
+    Você é um analista SQL especializado em e-commerce. Consulta o Postgres
+    para obter números exatos: faturamento, contagem de pedidos, ticket médio,
+    distribuição de pagamentos e métricas por segmento de cliente. Você nunca
+    inventa números — cada dado vem de uma query SQL executada.
+
+researcher:
+  role: "Pesquisador de Experiência do Cliente"
+  goal: "Analisar reviews e sentimentos dos clientes via busca semântica"
+  backstory: >
+    Você é um pesquisador de CX que entende o que os clientes sentem, não
+    apenas o que compram. Busca no Qdrant temas de reclamações, padrões de
+    sentimento e feedback sobre produtos. Você encontra a história humana
+    por trás dos dados.
+
+reporter:
+  role: "Redator de Relatórios Executivos"
+  goal: "Combinar métricas do analista e insights do pesquisador em relatórios acionáveis"
+  backstory: >
+    Você é um analista sênior de negócios que sintetiza dados quantitativos
+    e insights qualitativos em relatórios executivos claros e acionáveis.
+    Seus relatórios sempre incluem números específicos, principais achados
+    e recomendações concretas. Responde sempre em Português do Brasil.
+```
+
+---
+
+### Pattern 4: config/tasks.yaml
+
+```yaml
+analysis_task:
+  description: >
+    Analise a seguinte pergunta usando queries SQL no banco Postgres (The Ledger):
+    {question}
+
+    Schema disponível:
+    - customers(customer_id, name, email, city, state, segment)
+    - products(product_id, name, category, price, brand)
+    - orders(order_id, customer_id, product_id, qty, total, status, payment, created_at)
+
+    Execute as queries necessárias e retorne os dados exatos.
+  expected_output: >
+    Análise de dados estruturada com números específicos, resultados das
+    queries SQL e tabelas formatadas. Inclua os valores exatos encontrados.
+  agent: analyst
+
+research_task:
+  description: >
+    Pesquise reviews e sentimentos dos clientes para:
+    {question}
+
+    Busque no Qdrant (The Memory) os reviews mais relevantes e identifique
+    padrões de sentimento, reclamações recorrentes e feedback positivo.
+  expected_output: >
+    Síntese de feedback dos clientes com: temas identificados, exemplos de
+    reviews relevantes (com score de similaridade), distribuição de sentimentos
+    e padrões de reclamação.
+  agent: researcher
+
+report_task:
+  description: >
+    Crie um relatório executivo completo combinando a análise SQL e a pesquisa
+    de reviews para responder:
+    {question}
+
+    Use o contexto da análise de dados e da pesquisa de reviews para criar
+    um relatório coeso e acionável.
+  expected_output: >
+    Relatório executivo em Português do Brasil com:
+    1. Resumo executivo (2-3 frases)
+    2. Dados quantitativos (do AnalystAgent)
+    3. Insights qualitativos (do ResearchAgent)
+    4. Recomendações concretas (3-5 itens)
+  agent: reporter
+```
+
+---
+
+### Pattern 5: chainlit_app.py — LangFuse observe + async kickoff
 
 ```python
-"""chainlit_app.py — Chainlit frontend for ShopAgentCrew."""
+"""ShopAgent Day 4 — Chainlit app com CrewAI crew e LangFuse observability."""
 import asyncio
+import os
 
 import chainlit as cl
+from dotenv import load_dotenv
+from langfuse import get_client, observe
 
 from src.day4.crew import ShopAgentCrew
 
-AGENT_LABELS = {
-    "analyst": "AnalystAgent — The Ledger (SQL)",
-    "researcher": "ResearchAgent — The Memory (Semantic)",
-    "reporter": "ReporterAgent — Relatorio Executivo",
-}
+load_dotenv()
+
+langfuse = get_client()
+
+WELCOME = """**ShopAgent Day 4 — Multi-Agent** conectado!
+
+Tenho 3 agentes especializados:
+- **AnalystAgent** — SQL no Postgres (faturamento, pedidos, métricas)
+- **ResearchAgent** — Busca semântica no Qdrant (reviews, sentimentos)
+- **ReporterAgent** — Síntese executiva combinando os dois
+
+Exemplos:
+- "Qual o faturamento por estado e quais as principais reclamações?"
+- "Top 3 produtos mais vendidos e o que os clientes falam deles?"
+"""
 
 
 @cl.on_chat_start
-async def on_chat_start():
-    crew_instance = ShopAgentCrew()
-    cl.user_session.set("crew", crew_instance)
-    await cl.Message(
-        content=(
-            "**ShopAgent Multi-Agent pronto!**\n\n"
-            "3 agentes especializados:\n"
-            "- **AnalystAgent** — consultas SQL no The Ledger\n"
-            "- **ResearchAgent** — busca semantica no The Memory\n"
-            "- **ReporterAgent** — relatorio executivo consolidado\n\n"
-            "Faca sua pergunta sobre vendas, clientes ou satisfacao."
-        )
-    ).send()
+async def start():
+    cl.user_session.set("crew", ShopAgentCrew())
+    await cl.Message(content=WELCOME).send()
 
 
 @cl.on_message
-async def on_message(message: cl.Message):
+@observe()
+async def main(message: cl.Message):
     crew_instance: ShopAgentCrew = cl.user_session.get("crew")
 
-    # Pre-create steps for visual ordering
-    steps: dict[str, cl.Step] = {}
-    for key, label in AGENT_LABELS.items():
-        step = cl.Step(name=label, type="run")
-        steps[key] = step
-        await step.__aenter__()
-        step.output = "Aguardando..."
-        await step.update()
+    async with cl.Step(name="ShopAgent Crew", type="run") as step:
+        step.input = message.content
 
-    # Wire task callback to update steps
-    crew_obj = crew_instance.crew()
+        result = await asyncio.to_thread(
+            crew_instance.crew().kickoff,
+            inputs={"question": message.content},
+        )
 
-    def task_callback(task_output):
-        agent_key = getattr(task_output, "agent", "")
-        raw = getattr(task_output, "raw", str(task_output))
-        for key in steps:
-            if key in str(agent_key).lower():
-                # Sync context — schedule async update
-                loop = asyncio.get_event_loop()
-                asyncio.run_coroutine_threadsafe(
-                    _update_step(steps[key], raw[:600]),
-                    loop,
-                )
-                break
+        step.output = str(result)
 
-    crew_obj.task_callback = task_callback
+    langfuse.flush()
 
-    result = await asyncio.to_thread(
-        crew_obj.kickoff,
-        inputs={"question": message.content},
-    )
-
-    # Close all steps
-    for step in steps.values():
-        await step.__aexit__(None, None, None)
-
-    await cl.Message(content=str(result.raw)).send()
-
-
-async def _update_step(step: cl.Step, output: str):
-    step.output = output
-    await step.update()
+    msg = cl.Message(content="")
+    for token in str(result).split(" "):
+        await msg.stream_token(token + " ")
+    await msg.send()
 ```
 
-### Pattern 5: DeepEval Test Suite with GEval Custom Metric
+---
+
+### Pattern 6: eval_agent.py — DeepEval com pytest
 
 ```python
-"""eval_agent.py — DeepEval evaluation + LangFuse observability."""
+"""ShopAgent Day 4 — Suite DeepEval para avaliação de qualidade."""
 import pytest
 from deepeval import evaluate
-from deepeval.metrics import AnswerRelevancyMetric, GEval, ToolCorrectnessMetric
+from deepeval.metrics import AnswerRelevancyMetric, ToolCorrectnessMetric
 from deepeval.test_case import LLMTestCase, ToolCall
 
-# ---------------------------------------------------------------------------
-# Test matrix
-# ---------------------------------------------------------------------------
-SQL_CASES = [
-    {
-        "input": "Qual o faturamento total por estado?",
-        "actual_output": "SP: R$ 127.430, RJ: R$ 89.210, MG: R$ 68.440",
-        "tools_called": [ToolCall(name="supabase_execute_sql")],
-        "expected_tools": [ToolCall(name="supabase_execute_sql")],
-    },
-    {
-        "input": "Quantos pedidos foram feitos por pix?",
-        "actual_output": "1.847 pedidos pagos via pix (45% do total).",
-        "tools_called": [ToolCall(name="supabase_execute_sql")],
-        "expected_tools": [ToolCall(name="supabase_execute_sql")],
-    },
-]
+# Referência de tool names (devem bater com @tool("nome") em tools.py)
+SQL_TOOL = ToolCall(name="execute_sql")
+QDRANT_TOOL = ToolCall(name="qdrant_semantic_search")
 
-SEMANTIC_CASES = [
-    {
-        "input": "Quais clientes reclamam de entrega?",
-        "actual_output": "23 reviews negativos sobre entrega: atrasos e frete caro.",
-        "retrieval_context": ["Demorou 15 dias.", "Frete caro demais."],
-        "tools_called": [ToolCall(name="qdrant_semantic_search")],
-        "expected_tools": [ToolCall(name="qdrant_semantic_search")],
-    },
-    {
-        "input": "Qual o sentimento geral sobre o frete?",
-        "actual_output": "67% negativo. Principais queixas: prazo e custo.",
-        "retrieval_context": ["Frete caro demais.", "Chegou antes do previsto!"],
-        "tools_called": [ToolCall(name="qdrant_semantic_search")],
-        "expected_tools": [ToolCall(name="qdrant_semantic_search")],
-    },
-]
-
-HYBRID_CASE = {
-    "input": "Analise completa por regiao com faturamento e satisfacao",
-    "actual_output": (
-        "Resumo Executivo: SP lidera em faturamento (R$ 127k) mas concentra "
-        "34% das reclamacoes de entrega. Recomendacao: investir em logistica SP."
+TEST_CASES = [
+    LLMTestCase(
+        input="Qual o faturamento total por estado?",
+        actual_output="SP: R$ 127.430 | RJ: R$ 89.210 | MG: R$ 68.440",
+        tools_called=[SQL_TOOL],
+        expected_tools=[SQL_TOOL],
     ),
-    "tools_called": [
-        ToolCall(name="supabase_execute_sql"),
-        ToolCall(name="qdrant_semantic_search"),
-    ],
-    "expected_tools": [
-        ToolCall(name="supabase_execute_sql"),
-        ToolCall(name="qdrant_semantic_search"),
-    ],
-}
+    LLMTestCase(
+        input="Quantos pedidos foram pagos com pix?",
+        actual_output="1.847 pedidos via pix (45% do total).",
+        tools_called=[SQL_TOOL],
+        expected_tools=[SQL_TOOL],
+    ),
+    LLMTestCase(
+        input="Qual o ticket médio por segmento?",
+        actual_output="Premium: R$487 | Standard: R$234 | Basic: R$112",
+        tools_called=[SQL_TOOL],
+        expected_tools=[SQL_TOOL],
+    ),
+    LLMTestCase(
+        input="Quais clientes reclamam de entrega?",
+        actual_output="23 reviews com reclamações de entrega: atrasos e extravios.",
+        retrieval_context=["Demorou 15 dias.", "Não recebi.", "Frete caro."],
+        tools_called=[QDRANT_TOOL],
+        expected_tools=[QDRANT_TOOL],
+    ),
+    LLMTestCase(
+        input="O que os clientes falam sobre qualidade dos produtos?",
+        actual_output="Maioria positiva. 12% citam problemas com durabilidade.",
+        retrieval_context=["Produto ótimo!", "Quebrou em 2 semanas."],
+        tools_called=[QDRANT_TOOL],
+        expected_tools=[QDRANT_TOOL],
+    ),
+    LLMTestCase(
+        input="Qual o sentimento geral sobre o frete?",
+        actual_output="67% negativo. Prazo e custo são as principais queixas.",
+        retrieval_context=["Frete caro demais.", "Chegou antes do previsto!"],
+        tools_called=[QDRANT_TOOL],
+        expected_tools=[QDRANT_TOOL],
+    ),
+]
 
-# ---------------------------------------------------------------------------
-# Metrics
-# ---------------------------------------------------------------------------
 tool_metric = ToolCorrectnessMetric(threshold=1.0)
-
 relevancy_metric = AnswerRelevancyMetric(
     threshold=0.7,
     model="claude-sonnet-4-20250514",
     include_reason=True,
 )
 
-report_quality_metric = GEval(
-    name="report_quality",
-    criteria=(
-        "The output must contain: (1) specific numerical data from SQL queries, "
-        "(2) customer sentiment insights from review analysis, and "
-        "(3) at least 2 actionable recommendations."
-    ),
-    evaluation_params=["actual_output"],
-    model="claude-sonnet-4-20250514",
-    threshold=0.7,
-)
+
+@pytest.mark.parametrize("test_case", TEST_CASES)
+def test_tool_routing(test_case: LLMTestCase):
+    tool_metric.measure(test_case)
+    assert tool_metric.score >= tool_metric.threshold, tool_metric.reason
 
 
-# ---------------------------------------------------------------------------
-# pytest tests
-# ---------------------------------------------------------------------------
-@pytest.mark.parametrize("case", SQL_CASES, ids=lambda c: c["input"][:40])
-def test_analyst_routes_to_sql(case: dict):
-    tc = LLMTestCase(**case)
-    tool_metric.measure(tc)
-    assert tool_metric.score == 1.0
-
-
-@pytest.mark.parametrize("case", SEMANTIC_CASES, ids=lambda c: c["input"][:40])
-def test_researcher_routes_to_qdrant(case: dict):
-    tc = LLMTestCase(**case)
-    tool_metric.measure(tc)
-    assert tool_metric.score == 1.0
-
-
-def test_hybrid_uses_both_tools():
-    tc = LLMTestCase(**HYBRID_CASE)
-    tool_metric.measure(tc)
-    assert tool_metric.score == 1.0
-
-
-def test_report_quality():
-    tc = LLMTestCase(**HYBRID_CASE)
-    report_quality_metric.measure(tc)
-    assert report_quality_metric.score >= 0.7
-
-
-# ---------------------------------------------------------------------------
-# Batch evaluation (live demo)
-# ---------------------------------------------------------------------------
-def run_full_evaluation():
-    all_cases = [LLMTestCase(**c) for c in SQL_CASES + SEMANTIC_CASES + [HYBRID_CASE]]
-    evaluate(
-        test_cases=all_cases,
-        metrics=[tool_metric, relevancy_metric, report_quality_metric],
-    )
-
-
-if __name__ == "__main__":
-    run_full_evaluation()
+@pytest.mark.parametrize("test_case", TEST_CASES)
+def test_answer_relevancy(test_case: LLMTestCase):
+    relevancy_metric.measure(test_case)
+    assert relevancy_metric.score >= relevancy_metric.threshold, relevancy_metric.reason
 ```
 
-### Pattern 6: LangFuse @observe Wrapper
+---
 
-```python
-"""Add to crew.py or eval_agent.py for LangFuse tracing."""
-from langfuse import observe
+### Pattern 7: requirements.txt
 
-
-@observe(name="shopagent-crew-kickoff")
-def run_crew_traced(question: str) -> str:
-    """Run the full crew with LangFuse tracing."""
-    from src.day4.crew import ShopAgentCrew
-
-    crew_instance = ShopAgentCrew()
-    result = crew_instance.crew().kickoff(inputs={"question": question})
-    return result.raw
+```text
+# ShopAgent Day 4 — Multi-Agent CrewAI
+crewai==0.108.0
+crewai-tools==0.38.1
+chainlit==2.5.5
+deepeval==2.7.3
+langfuse==3.0.3
+psycopg2-binary==2.9.10
+qdrant-client==1.14.2
+fastembed==0.6.1
+python-dotenv==1.1.0
+anthropic==0.51.0
 ```
 
 ---
@@ -701,50 +670,46 @@ def run_crew_traced(question: str) -> str:
 ## Data Flow
 
 ```text
-1. User types question in Chainlit chat
-   │  "Analise completa de satisfacao por regiao com impacto financeiro"
-   ▼
-2. chainlit_app.py creates 3 cl.Steps (Analyst, Researcher, Reporter)
-   │  All show "Aguardando..." initially
-   ▼
-3. crew.kickoff(inputs={"question": ...}) starts in background thread
+1. Usuário digita pergunta no Chainlit Browser
    │
    ▼
-4. SEQUENTIAL STEP 1: AnalystAgent
-   │  Reads task description from tasks.yaml (interpolated with {question})
-   │  Calls supabase_execute_sql("SELECT state, SUM(total) FROM orders...")
-   │  → psycopg2 executes → returns pipe-delimited table
-   │  → task_callback fires → cl.Step "AnalystAgent" updates with SQL results
+2. @observe() captura entrada → LangFuse inicia trace
+   │
    ▼
-5. SEQUENTIAL STEP 2: ResearchAgent
-   │  Reads task description from tasks.yaml (interpolated with {question})
-   │  Calls qdrant_semantic_search("reclamacoes satisfacao regiao")
-   │  → fastembed encodes → qdrant_client searches → returns scored reviews
-   │  → task_callback fires → cl.Step "ResearchAgent" updates with review themes
+3. asyncio.to_thread → crew.kickoff({"question": pergunta})
+   │
+   ├─ 4a. AnalystAgent recebe analysis_task
+   │       └─ execute_sql(query) → psycopg2 → Postgres/Supabase
+   │       └─ retorna tabela com resultados
+   │
+   ├─ 4b. ResearchAgent recebe research_task
+   │       └─ qdrant_semantic_search(question) → fastembed → Qdrant
+   │       └─ retorna 5 reviews mais relevantes
+   │
+   └─ 4c. ReporterAgent recebe report_task
+           └─ context=[analysis_result, research_result]
+           └─ sintetiza em relatório executivo PT-BR
+   │
    ▼
-6. SEQUENTIAL STEP 3: ReporterAgent
-   │  Receives context=[analysis_task output, research_task output]
-   │  No tools — synthesizes from both inputs
-   │  Generates executive report: Resumo, Metricas, Voz do Cliente, Recomendacoes
-   │  → task_callback fires → cl.Step "ReporterAgent" updates with report
+5. crew.kickoff() retorna CrewOutput (str)
+   │
    ▼
-7. crew.kickoff returns → result.raw sent as cl.Message
-   │  All steps closed → final report displayed in chat
+6. langfuse.flush() → trace salvo em cloud.langfuse.com
+   │
    ▼
-8. (Optional) LangFuse trace captured with @observe
-   │  Token usage, latency, cost per agent visible in dashboard
+7. stream_token() token a token → Browser exibe resposta
 ```
 
 ---
 
 ## Integration Points
 
-| External System | Integration Type | Authentication | Port | Env Vars |
-|-----------------|-----------------|----------------|------|----------|
-| Postgres (The Ledger) | psycopg2 direct connection | User/password | 5432 | `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` |
-| Qdrant (The Memory) | qdrant_client HTTP | API key (cloud) or None (local) | 6333 | `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION` |
-| Anthropic API | CrewAI's litellm integration | API key | HTTPS | `ANTHROPIC_API_KEY` |
-| LangFuse | `@observe` decorator / SDK | Public + secret key | HTTPS | `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_BASE_URL` |
+| External System | Integration Type | Authentication | Local | Cloud |
+|-----------------|-----------------|----------------|-------|-------|
+| Postgres/Supabase | psycopg2 (TCP) | POSTGRES_* vars | Docker localhost:5432 | Supabase host + password |
+| Qdrant | qdrant-client HTTP | QDRANT_URL + QDRANT_API_KEY | http://localhost:6333 | https://xxx.qdrant.io:6333 |
+| Anthropic API | anthropic SDK | ANTHROPIC_API_KEY | Mesmo | Mesmo |
+| LangFuse | langfuse SDK | LANGFUSE_SECRET_KEY + PUBLIC_KEY | Opcional | cloud.langfuse.com |
 
 ---
 
@@ -752,57 +717,57 @@ def run_crew_traced(question: str) -> str:
 
 | Test Type | Scope | Files | Tools | Coverage Goal |
 |-----------|-------|-------|-------|---------------|
-| Tool Correctness | Agent routes to correct tool per question type | `eval_agent.py` | DeepEval `ToolCorrectnessMetric` | 6 cases: 2 SQL, 2 semantic, 1 hybrid, 1 report quality |
-| Answer Relevancy | Final output is relevant to input question | `eval_agent.py` | DeepEval `AnswerRelevancyMetric(threshold=0.7)` | All 5 cases above 0.7 |
-| Report Quality | Executive report contains data + insights + recommendations | `eval_agent.py` | DeepEval `GEval(criteria=...)` | Hybrid case passes custom criteria |
-| Smoke | Tool connectivity | CLI | `python -c "from src.day4.tools import ..."` | Both tools import and connect |
-| Manual E2E | Full crew flow | Chainlit | Run app, ask 3 demo questions | AT-001 through AT-005 |
-| CLI E2E | Crew execution without Chainlit | Terminal | `python src/day4/crew.py` | AT-009 |
+| Routing | Tool selection correctness | `eval_agent.py` | DeepEval `ToolCorrectnessMetric` | 100% (threshold=1.0) |
+| Quality | Answer relevance | `eval_agent.py` | DeepEval `AnswerRelevancyMetric` | >70% (threshold=0.7) |
+| E2E | Full Chainlit flow | Manual no browser | Chainlit UI | Happy path + pergunta híbrida |
+
+**Executar:**
+```bash
+# Testes de qualidade
+pytest src/day4/eval_agent.py -v
+
+# Interface (abre no browser)
+chainlit run src/day4/chainlit_app.py -w --port 8001
+```
 
 ---
 
 ## Error Handling
 
-| Error Type | Handling Strategy | User-Visible? |
-|------------|-------------------|---------------|
-| Postgres connection failure | Tool returns `"SQL Error: could not connect..."` | Yes — agent relays error, may retry |
-| Invalid SQL generated | psycopg2 raises, tool returns `"SQL Error: {e}"` | Yes — agent may self-correct SQL |
-| Qdrant connection failure | Tool catches exception, returns `"Qdrant Error: {e}"` | Yes — agent relays error |
-| Empty Qdrant results | Tool returns `"Nenhum review encontrado..."` | Yes — agent explains no results |
-| FastEmbed model load failure | First call to `_get_embedding_model()` fails | Yes — tool returns error string |
-| Anthropic API timeout | CrewAI propagates; Chainlit shows error | Yes — message in chat |
-| LangFuse connection failure | Silent — tracing fails gracefully, crew still executes | No — observability offline but agents work |
-| DeepEval API error | Test case fails with traceback | Visible in pytest output |
+| Error Type | Handling Strategy | Retry? |
+|------------|-------------------|--------|
+| `psycopg2.OperationalError` | `execute_sql` retorna `"SQL Error: {e}"` — agente interpreta e tenta query diferente | Via CrewAI (agente reescreve query) |
+| `qdrant_client` connection error | `qdrant_semantic_search` retorna `"Semantic Search Error: {e}"` | Via CrewAI (agente informa falha) |
+| `ANTHROPIC_API_KEY` inválida | CrewAI/Anthropic SDK levanta `AuthenticationError` — Chainlit exibe erro | Não |
+| LangFuse vars ausentes | `langfuse.flush()` silencioso se não autenticado (não bloqueia app) | Não |
 
 ---
 
 ## Configuration
 
-| Config Key | Source | Default | Description |
-|------------|--------|---------|-------------|
-| `POSTGRES_HOST` | .env | `localhost` | Postgres host (local or cloud) |
-| `POSTGRES_PORT` | .env | `5432` | Postgres port |
-| `POSTGRES_DB` | .env | `shopagent` | Database name |
-| `POSTGRES_USER` | .env | `shopagent` | Database user |
-| `POSTGRES_PASSWORD` | .env | `shopagent` | Database password |
-| `QDRANT_URL` | .env | `http://localhost:6333` | Qdrant endpoint (local or cloud) |
-| `QDRANT_API_KEY` | .env | `None` | Qdrant Cloud API key (None for local) |
-| `QDRANT_COLLECTION` | .env | `shopagent_reviews` | Qdrant collection name |
-| `ANTHROPIC_API_KEY` | .env | (required) | Claude API key |
-| `LANGFUSE_SECRET_KEY` | .env | (optional) | LangFuse server-side key |
-| `LANGFUSE_PUBLIC_KEY` | .env | (optional) | LangFuse client-side key |
-| `LANGFUSE_BASE_URL` | .env | `https://cloud.langfuse.com` | LangFuse API endpoint |
-
-**Cloud migration:** Change `POSTGRES_HOST` + `QDRANT_URL` + `QDRANT_API_KEY`. Zero code changes.
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `POSTGRES_HOST` | string | `localhost` | Host do Postgres (local ou Supabase) |
+| `POSTGRES_PORT` | int | `5432` | Porta do Postgres |
+| `POSTGRES_DB` | string | `shopagent` | Nome do banco |
+| `POSTGRES_USER` | string | `shopagent` | Usuário |
+| `POSTGRES_PASSWORD` | string | `shopagent` | Senha |
+| `QDRANT_URL` | string | `http://localhost:6333` | URL do Qdrant (local ou cloud) |
+| `QDRANT_API_KEY` | string | `None` | API key (obrigatório para Qdrant Cloud) |
+| `QDRANT_COLLECTION` | string | `shopagent_reviews` | Nome da coleção |
+| `ANTHROPIC_API_KEY` | string | — | Obrigatório |
+| `LANGFUSE_SECRET_KEY` | string | `None` | LangFuse (opcional — desabilita traces se ausente) |
+| `LANGFUSE_PUBLIC_KEY` | string | `None` | LangFuse |
+| `LANGFUSE_BASE_URL` | string | `https://cloud.langfuse.com` | LangFuse endpoint |
 
 ---
 
 ## Security Considerations
 
-- **Open SQL execution:** Agent can run any SQL including DELETE/DROP. Mitigated by: (a) local Docker is throwaway, (b) cloud Supabase uses credentials with appropriate permissions, (c) tool docstring instructs "Always write SELECT queries"
-- **API key management:** All keys loaded from `.env`, never hardcoded. `.env` is in `.gitignore`
-- **Qdrant Cloud auth:** `QDRANT_API_KEY` required for cloud; omitted for local Docker (no auth)
-- **LangFuse keys:** Optional — system works without them, just no observability
+- Todas as credenciais via variáveis de ambiente — nenhum hardcode em arquivos `.py`
+- `execute_sql` aceita qualquer query — adequado para demo educacional (ambiente controlado)
+- `QDRANT_API_KEY` é `None` por padrão — qdrant-client ignora se não fornecido (local sem auth)
+- `.env` não deve ser commitado (já está no `.gitignore` do projeto)
 
 ---
 
@@ -810,32 +775,10 @@ def run_crew_traced(question: str) -> str:
 
 | Aspect | Implementation |
 |--------|----------------|
-| Logging | CrewAI `verbose=True` prints agent reasoning to terminal |
-| Tracing | LangFuse `@observe` decorator on crew kickoff; per-agent spans visible in dashboard |
-| Metrics | LangFuse tracks token usage, latency, and estimated cost per trace |
-| Evaluation | DeepEval batch evaluation produces pass/fail summary in terminal |
-| UI Trace | Chainlit `cl.Step` per agent shows intermediate results in browser |
-
----
-
-## Dependencies (requirements.txt)
-
-```text
-crewai>=0.100.0
-crewai-tools>=0.17.0
-psycopg2-binary>=2.9.0
-qdrant-client>=1.12.0
-fastembed>=0.4.0
-python-dotenv>=1.0.0
-chainlit>=2.0.0
-deepeval>=2.0.0
-langfuse>=2.50.0
-anthropic>=0.40.0
-```
-
-**NOT included (removed from Day 3):**
-- `llama-index-*` — replaced by direct `qdrant_client` + `fastembed`
-- `langchain-*` / `langgraph` — replaced by CrewAI
+| Traces | LangFuse `@observe()` em `on_message` — captura entrada, saída e duração do kickoff completo |
+| Logs | CrewAI `verbose=True` — raciocínio dos agentes visível no terminal durante execução |
+| Métricas | DeepEval `AnswerRelevancyMetric` — score de qualidade por test case |
+| Roteamento | DeepEval `ToolCorrectnessMetric` — valida SQL vs Qdrant routing |
 
 ---
 
@@ -843,8 +786,9 @@ anthropic>=0.40.0
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
-| 1.0 | 2026-04-16 | design-agent | Initial version |
-| 1.1 | 2026-04-16 | iterate-agent | Reassigned CrewAI files (2,3,4,5,8) from @shopagent-builder to @crewai-specialist per user request |
+| 1.0 | 2026-04-26 | design-agent | Initial version — baseado em DEFINE_SHOPAGENT_DAY4.md |
+| 1.1 | 2026-04-26 | iterate-agent | Adicionada seção "Agent Responsibilities" (escopo, tools, roteamento por tipo de pergunta) + Agent Assignment no File Manifest com @crewai-specialist para tasks CrewAI |
+| 1.2 | 2026-04-27 | iterate-agent | Decision 4: LLM explícito `anthropic/claude-sonnet-4-6` via `LLM()` em cada agente — CrewAI usa OpenAI por padrão. Cascade: Pattern 2 (crew.py) atualizado com `llm=_llm` em todos os Agent() |
 
 ---
 
