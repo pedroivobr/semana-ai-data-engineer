@@ -1,14 +1,20 @@
-"""ShopAgent Day 4 — CrewAI 3-agent crew for e-commerce analysis."""
-
+"""ShopAgent Day 4 — CrewAI crew com 3 agentes especializados."""
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any, Callable
 
-from crewai import Agent, Crew, Process, Task
+from crewai import Agent, Crew, LLM, Process, Task
 from crewai.project import CrewBase, agent, crew, task
+from dotenv import load_dotenv
 
-from src.day4.tools import qdrant_semantic_search, supabase_execute_sql
+from src.day4.tools import execute_sql, qdrant_semantic_search
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env")
+
+_llm = LLM(model="anthropic/claude-sonnet-4-6")
 
 
 AGENT_SEQUENCE = ["analyst", "researcher", "reporter"]
@@ -16,7 +22,7 @@ AGENT_SEQUENCE = ["analyst", "researcher", "reporter"]
 
 @CrewBase
 class ShopAgentCrew:
-    """ShopAgent multi-agent crew: Analyst + Researcher + Reporter."""
+    """Crew multi-agente para análise de e-commerce."""
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
@@ -25,9 +31,8 @@ class ShopAgentCrew:
     def analyst(self) -> Agent:
         return Agent(
             config=self.agents_config["analyst"],
-            tools=[supabase_execute_sql],
-            allow_delegation=False,
-            llm="anthropic/claude-haiku-4-5-20251001",
+            tools=[execute_sql],
+            llm=_llm,
             verbose=True,
         )
 
@@ -36,8 +41,7 @@ class ShopAgentCrew:
         return Agent(
             config=self.agents_config["researcher"],
             tools=[qdrant_semantic_search],
-            allow_delegation=False,
-            llm="anthropic/claude-haiku-4-5-20251001",
+            llm=_llm,
             verbose=True,
         )
 
@@ -45,8 +49,7 @@ class ShopAgentCrew:
     def reporter(self) -> Agent:
         return Agent(
             config=self.agents_config["reporter"],
-            allow_delegation=False,
-            llm="anthropic/claude-haiku-4-5-20251001",
+            llm=_llm,
             verbose=True,
         )
 
@@ -86,12 +89,7 @@ def run_crew_with_emitter(
     trace_id: str,
     emit: Callable[[dict[str, Any]], None],
 ) -> str:
-    """Run the crew while broadcasting agent lifecycle events.
-
-    Emits agent_start before each task and agent_complete after. The tools
-    themselves emit tool_start / tool_result via contextvars installed by the
-    FastAPI handler before calling this function.
-    """
+    """Run the crew while broadcasting agent lifecycle events."""
     crew_instance = ShopAgentCrew()
     crew_obj = crew_instance.crew()
 

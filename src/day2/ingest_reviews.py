@@ -1,37 +1,27 @@
 """ShopAgent Day 2 — Ingest reviews JSONL into Qdrant (The Memory)."""
 
+import json
 import os
 from pathlib import Path
 
-import qdrant_client
 from dotenv import load_dotenv
-from llama_index.core import Settings, StorageContext, VectorStoreIndex
-from llama_index.embeddings.fastembed import FastEmbedEmbedding
-from llama_index.llms.anthropic import Anthropic
-from llama_index.readers.json import JSONReader
-from llama_index.vector_stores.qdrant import QdrantVectorStore
+from fastembed import TextEmbedding
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, PointStruct, VectorParams
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
-_settings_initialized = False
-
-
-def _configure_settings() -> None:
-    global _settings_initialized
-    if _settings_initialized:
-        return
-    Settings.llm = Anthropic(model="claude-sonnet-4-20250514")
-    Settings.embed_model = FastEmbedEmbedding(model_name="BAAI/bge-base-en-v1.5")
-    _settings_initialized = True
+EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+VECTOR_NAME = "fast-all-minilm-l6-v2"
+VECTOR_SIZE = 384
 
 
 def ingest_reviews(
     jsonl_path: str | None = None,
     qdrant_url: str | None = None,
     collection_name: str | None = None,
-) -> VectorStoreIndex:
-    _configure_settings()
+) -> None:
     path = Path(jsonl_path) if jsonl_path else PROJECT_ROOT / "gen" / "data" / "reviews" / "reviews.jsonl"
     qdrant_url = qdrant_url or os.environ.get("QDRANT_URL", "http://localhost:6333")
     collection_name = collection_name or os.environ.get("QDRANT_COLLECTION", "shopagent_reviews")
@@ -39,29 +29,38 @@ def ingest_reviews(
     if not path.exists():
         raise FileNotFoundError(f"Reviews file not found: {path}")
 
-    reader = JSONReader(is_jsonl=True, clean_json=True)
-    documents = reader.load_data(input_file=str(path))
-    print(f"Loaded {len(documents)} reviews from {path.name}")
+    reviews = []
+    with open(path) as f:
+        for line in f:
+            reviews.append(json.loads(line))
+    print(f"Loaded {len(reviews)} reviews from {path.name}")
 
-    client = qdrant_client.QdrantClient(url=qdrant_url)
-    vector_store = QdrantVectorStore(client=client, collection_name=collection_name)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    print(f"Generating embeddings with {EMBED_MODEL}...")
+    embedder = TextEmbedding(EMBED_MODEL)
+    texts = [r["comment"] for r in reviews]
+    embeddings = list(embedder.embed(texts))
 
-    index = VectorStoreIndex.from_documents(
-        documents, storage_context=storage_context, show_progress=True,
+    client = QdrantClient(url=qdrant_url)
+
+    if client.collection_exists(collection_name):
+        client.delete_collection(collection_name)
+
+    client.create_collection(
+        collection_name=collection_name,
+        vectors_config={VECTOR_NAME: VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)},
     )
-    print(f"Indexed {len(documents)} reviews into Qdrant '{collection_name}'")
 
-    return index
+    points = [
+        PointStruct(
+            id=i,
+            vector={VECTOR_NAME: embedding.tolist()},
+            payload={"document": r["comment"], **r},
+        )
+        for i, (r, embedding) in enumerate(zip(reviews, embeddings))
+    ]
+    client.upsert(collection_name=collection_name, points=points)
+    print(f"Indexed {len(reviews)} reviews into Qdrant '{collection_name}' (vector: {VECTOR_NAME})")
 
 
 if __name__ == "__main__":
-    index = ingest_reviews()
-
-    engine = index.as_query_engine(similarity_top_k=5)
-    response = engine.query("Clientes reclamando de entrega")
-    print(f"\nTest query: 'Clientes reclamando de entrega'")
-    print(f"Answer: {response.response}")
-    print(f"\nSources ({len(response.source_nodes)} chunks):")
-    for node in response.source_nodes:
-        print(f"  [{node.score:.3f}] {node.text[:100]}...")
+    ingest_reviews()
